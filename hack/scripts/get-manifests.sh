@@ -5,7 +5,6 @@
 # Network fetching is explicit with USE_LOCAL=false.
 set -euo pipefail
 
-GITHUB_URL="https://github.com"
 PLATFORM_MANIFEST_DIR="${ODH_PLATFORM_TYPE:-OpenDataHub}"
 if [[ "${PLATFORM_MANIFEST_DIR}" == "OpenDataHub" || "${PLATFORM_MANIFEST_DIR}" == "opendatahub" || "${PLATFORM_MANIFEST_DIR}" == "odh" ]]; then
     PLATFORM_MANIFEST_DIR="odh"
@@ -15,38 +14,8 @@ fi
 LOCAL_MANIFESTS_ROOT="${LOCAL_MANIFESTS_ROOT:-./opt/manifests}"
 DST_MANIFESTS_DIR="${DST_MANIFESTS_DIR:-${LOCAL_MANIFESTS_ROOT}}"
 USE_LOCAL="${USE_LOCAL:-true}"
-
-# COMPONENT_MANIFESTS entries are in the format:
-#   "repo-org:repo-name:ref-name:source-folder"
-#
-# ref-name supports:
-#   1. "branch"          - tracks latest commit on branch
-#   2. "tag"             - immutable reference (e.g., v1.4.2)
-#   3. "branch@sha"      - fetch branch, reset to specific commit (preferred for pinning)
-#   4. "tag@sha"         - fetch tag, reset to specific commit
-
-declare -A ODH_COMPONENT_MANIFESTS=(
-    ["kuberay"]="opendatahub-io:kuberay:dev@2ae7d5536dbac15287940606003151c2cd0819ad:ray-operator/config"
-)
-
-declare -A RHOAI_COMPONENT_MANIFESTS=(
-    ["kuberay"]="red-hat-data-services:kuberay:main@3a7b762f61ff9606ec0da721ed59e3678e8ec59a:ray-operator/config"
-)
-
-# Select manifests based on platform type
-if [[ "${ODH_PLATFORM_TYPE:-OpenDataHub}" == "OpenDataHub" || "${ODH_PLATFORM_TYPE:-OpenDataHub}" == "opendatahub" || "${ODH_PLATFORM_TYPE:-OpenDataHub}" == "odh" ]]; then
-    echo "Selecting manifests for ODH"
-    declare -A COMPONENT_MANIFESTS=()
-    for key in "${!ODH_COMPONENT_MANIFESTS[@]}"; do
-        COMPONENT_MANIFESTS["$key"]="${ODH_COMPONENT_MANIFESTS[$key]}"
-    done
-else
-    echo "Selecting manifests for RHOAI"
-    declare -A COMPONENT_MANIFESTS=()
-    for key in "${!RHOAI_COMPONENT_MANIFESTS[@]}"; do
-        COMPONENT_MANIFESTS["$key"]="${RHOAI_COMPONENT_MANIFESTS[$key]}"
-    done
-fi
+MANIFESTS_SOURCES_FILE="${MANIFESTS_SOURCES_FILE:-./hack/manifests-sources.yaml}"
+YQ="${YQ:-./bin/yq}"
 
 TMP_DIR=$(mktemp -d -t "odh-kuberay-manifests.XXXXXXXXXX")
 trap '{ rm -rf -- "${TMP_DIR}"; }' EXIT
@@ -113,16 +82,7 @@ function git_fetch_ref()
 
 download_manifest() {
     local key=$1
-    local repo_info=$2
-    echo -e "\033[32mPreparing \033[33m${key}\033[32m:\033[0m ${repo_info}"
-    IFS=':' read -r -a parts <<< "${repo_info}"
-
-    local repo_org="${parts[0]}"
-    local repo_name="${parts[1]}"
-    local repo_ref="${parts[2]}"
-    local source_path="${parts[3]}"
-
-    local repo_url="${GITHUB_URL}/${repo_org}/${repo_name}"
+    local source_path="ray-operator/config"
     local repo_dir="${TMP_DIR}/${key}"
 
     if [[ "${USE_LOCAL}" == "true" ]]; then
@@ -134,7 +94,7 @@ download_manifest() {
             cp -a "${snapshot_dir}/." "${DST_MANIFESTS_DIR}/${key}/"
             return
         fi
-        if [[ ! -e "../${repo_name}/${source_path}" ]]; then
+        if [[ ! -e "../${key}/${source_path}" ]]; then
             echo "ERROR: local manifest snapshot not found at '${snapshot_dir}'"
             echo "       Run 'make update-manifests' from a connected environment"
             return 1
@@ -142,9 +102,19 @@ download_manifest() {
         echo "Copying from adjacent checkout ..."
         rm -rf "${DST_MANIFESTS_DIR:?}/${key}"
         mkdir -p "${DST_MANIFESTS_DIR}/${key}"
-        cp -a "../${repo_name}/${source_path}/." "${DST_MANIFESTS_DIR}/${key}/"
+        cp -a "../${key}/${source_path}/." "${DST_MANIFESTS_DIR}/${key}/"
         return
     fi
+
+    if ! command -v "${YQ}" >/dev/null 2>&1; then
+        echo "ERROR: yq is required for network refreshes. Run 'make yq'." >&2
+        return 1
+    fi
+    local repo_url repo_ref
+    repo_url=$("${YQ}" -er ".components.${key}.${PLATFORM_MANIFEST_DIR}.repository" "${MANIFESTS_SOURCES_FILE}")
+    repo_ref=$("${YQ}" -er ".components.${key}.${PLATFORM_MANIFEST_DIR}.ref" "${MANIFESTS_SOURCES_FILE}")
+    source_path=$("${YQ}" -er ".components.${key}.sourcePath" "${MANIFESTS_SOURCES_FILE}")
+    echo "Preparing ${key}: ${repo_url}@${repo_ref}"
 
     if ! git_fetch_ref "${repo_url}" "${repo_ref}" "${repo_dir}"; then
         echo "ERROR: Failed to fetch ref '${repo_ref}' from '${repo_url}' for component '${key}'"
@@ -153,26 +123,10 @@ download_manifest() {
 
     rm -rf "${DST_MANIFESTS_DIR:?}/${key}"
     mkdir -p "${DST_MANIFESTS_DIR}/${key}"
-    cp -rf "${repo_dir}/${source_path}"/* "${DST_MANIFESTS_DIR}/${key}"
+    cp -a "${repo_dir}/${source_path}/." "${DST_MANIFESTS_DIR}/${key}/"
 }
 
-declare -a pids=()
-for key in "${!COMPONENT_MANIFESTS[@]}"; do
-    download_manifest "${key}" "${COMPONENT_MANIFESTS[$key]}" &
-    pids+=("$!")
-done
-
-failed=0
-for pid in "${pids[@]}"; do
-    if ! wait "${pid}"; then
-        failed=1
-    fi
-done
-
-if [ "${failed}" -eq 1 ]; then
-    echo "One or more downloads failed"
-    exit 1
-fi
+download_manifest kuberay
 
 # Remove test/sample/scorecard artifacts not needed at runtime
 rm -rf "${DST_MANIFESTS_DIR}"/*/e2e "${DST_MANIFESTS_DIR}"/*/scorecard \

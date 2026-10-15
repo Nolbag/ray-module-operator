@@ -1,0 +1,60 @@
+# Install as .github/workflows/notify-ray-module.yaml in red-hat-data-services/kuberay.
+name: Notify Ray module of downstream manifest changes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ray-operator/config/**
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  notify:
+    if: github.repository == 'red-hat-data-services/kuberay'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Create dispatch token for the ODH Ray module repository
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.MANIFESTS_SYNC_APP_ID }}
+          private-key: ${{ secrets.MANIFESTS_SYNC_APP_PRIVATE_KEY }}
+          owner: opendatahub-io
+          repositories: ray-module-operator
+          permission-contents: write
+
+      - name: Trigger manifest sync
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          for delay in 0 5 15; do
+            sleep "$delay"
+            if gh api --method POST repos/opendatahub-io/ray-module-operator/dispatches \
+              --raw-field event_type=kuberay-manifests-changed; then
+              exit 0
+            fi
+          done
+          echo '::error::Could not notify the Ray module repository after three attempts.'
+          exit 1
+
+      - name: Report trigger failure to Slack
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.MANIFESTS_SYNC_SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo '::error::Downstream notification failed and the Slack webhook is not configured.'
+            exit 1
+          fi
+          jq -n --arg url "$RUN_URL" \
+            '{text: ("Downstream KubeRay could not trigger the manifest update workflow. Check: " + $url)}' \
+            > "$RUNNER_TEMP/manifest-trigger-failure.json"
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 30 --retry 3 \
+            --header 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/manifest-trigger-failure.json" \
+            "$SLACK_WEBHOOK_URL"

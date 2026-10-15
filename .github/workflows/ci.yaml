@@ -14,6 +14,25 @@ env:
   GO_VERSION: '1.26'
 
 jobs:
+  manifest-sync:
+    name: Manifest Sync Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Test downstream-gated manifest sync
+        run: |
+          make yq
+          python3 -B -m unittest discover -s hack/tests -v
+
+      - name: Verify snapshots match their pinned source commits
+        run: make verify-operand-manifests
+
   lint:
     name: Lint
     runs-on: ubuntu-24.04

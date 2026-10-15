@@ -1,5 +1,6 @@
-# Provenance for the module-owned operand manifest snapshots.
+# Single source of truth for operand manifest repositories, branches, and pins.
 # Refresh with `make update-manifests` in a connected environment.
+# The sync workflow advances these pins and both snapshots in the same PR.
 components:
   kuberay:
     sourcePath: ray-operator/config

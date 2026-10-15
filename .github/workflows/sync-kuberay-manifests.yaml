@@ -1,0 +1,127 @@
+name: Sync KubeRay manifests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sync-kuberay-manifests.yaml
+      - hack/manifests-sources.yaml
+      - hack/scripts/get-manifests.sh
+      - hack/scripts/sync-manifests.py
+  repository_dispatch:
+    types: [kuberay-manifests-changed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-kuberay-manifests
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'opendatahub-io/ray-module-operator'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Check Slack configuration
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.MANIFESTS_SYNC_SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo '::error::Configure MANIFESTS_SYNC_SLACK_WEBHOOK_URL before enabling manifest sync.'
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Sync both snapshots after downstream drift
+        run: |
+          make yq kustomize
+          python3 hack/scripts/sync-manifests.py
+
+      - name: Validate both platform manifests
+        run: |
+          bin/kustomize build opt/manifests/odh/kuberay/openshift > "$RUNNER_TEMP/odh-kuberay.yaml"
+          bin/kustomize build opt/manifests/rhoai/kuberay/openshift > "$RUNNER_TEMP/rhoai-kuberay.yaml"
+
+      - name: Read snapshot pins
+        id: pins
+        run: |
+          echo "odh=$(bin/yq -r '.components.kuberay.odh.ref' hack/manifests-sources.yaml)" >> "$GITHUB_OUTPUT"
+          echo "rhoai=$(bin/yq -r '.components.kuberay.rhoai.ref' hack/manifests-sources.yaml)" >> "$GITHUB_OUTPUT"
+
+      # An App token lets the resulting PR trigger the usual pull_request CI.
+      - name: Create PR token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.MANIFESTS_SYNC_APP_ID }}
+          private-key: ${{ secrets.MANIFESTS_SYNC_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open or update manifest PR
+        id: pr
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: automation/sync-kuberay-manifests
+          delete-branch: true
+          add-paths: |
+            hack/manifests-sources.yaml
+            opt/manifests/odh/kuberay
+            opt/manifests/rhoai/kuberay
+          commit-message: 'chore: sync KubeRay manifests after downstream changes'
+          title: 'chore: sync KubeRay manifests after downstream changes'
+          body: |
+            Runtime manifest changes have reached `red-hat-data-services/kuberay`.
+            Refresh both platform snapshots from their respective source repositories:
+
+            - ODH: `opendatahub-io/kuberay`, `${{ steps.pins.outputs.odh }}`
+            - RHOAI: `red-hat-data-services/kuberay`, `${{ steps.pins.outputs.rhoai }}`
+
+            Both OpenShift Kustomize overlays were built successfully.
+            The regular pull request CI must pass before merging.
+
+      - name: Notify team Slack channel of new PR
+        if: steps.pr.outputs.pull-request-operation == 'created'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.MANIFESTS_SYNC_SLACK_WEBHOOK_URL }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          jq -n --arg url "$PR_URL" \
+            '{text: ("KubeRay manifest changes have reached downstream. An update PR for both ODH and RHOAI is ready for review: " + $url)}' \
+            > "$RUNNER_TEMP/manifest-sync-slack.json"
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 30 --retry 3 \
+            --header 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/manifest-sync-slack.json" \
+            "$SLACK_WEBHOOK_URL"
+
+      - name: Report sync failure to Slack
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.MANIFESTS_SYNC_SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo '::error::Manifest sync failed and the Slack webhook is not configured.'
+            exit 1
+          fi
+          jq -n --arg url "$RUN_URL" \
+            '{text: ("KubeRay manifest sync failed. Check the workflow run: " + $url)}' \
+            > "$RUNNER_TEMP/manifest-sync-failure.json"
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 30 --retry 3 \
+            --header 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/manifest-sync-failure.json" \
+            "$SLACK_WEBHOOK_URL"

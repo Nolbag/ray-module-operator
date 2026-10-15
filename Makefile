@@ -59,9 +59,17 @@ get-manifests: ## Materialize the local KubeRay snapshot.
 	./hack/scripts/get-manifests.sh
 
 .PHONY: update-manifests
-update-manifests: ## Refresh committed KubeRay snapshots from their pinned Git SHAs.
-	ODH_PLATFORM_TYPE=OpenDataHub USE_LOCAL=false DST_MANIFESTS_DIR=./opt/manifests/odh ./hack/scripts/get-manifests.sh
-	ODH_PLATFORM_TYPE=rhoai USE_LOCAL=false DST_MANIFESTS_DIR=./opt/manifests/rhoai ./hack/scripts/get-manifests.sh
+update-manifests: yq ## Refresh committed KubeRay snapshots from their pinned Git SHAs.
+	ODH_PLATFORM_TYPE=OpenDataHub USE_LOCAL=false YQ="$(YQ)" DST_MANIFESTS_DIR=./opt/manifests/odh ./hack/scripts/get-manifests.sh
+	ODH_PLATFORM_TYPE=rhoai USE_LOCAL=false YQ="$(YQ)" DST_MANIFESTS_DIR=./opt/manifests/rhoai ./hack/scripts/get-manifests.sh
+
+.PHONY: sync-manifests
+sync-manifests: yq ## Advance both platform snapshots after downstream manifest drift.
+	YQ="$(YQ)" python3 hack/scripts/sync-manifests.py
+
+.PHONY: verify-operand-manifests
+verify-operand-manifests: yq ## Verify both snapshots reproduce their pinned source commits.
+	YQ="$(YQ)" python3 hack/scripts/sync-manifests.py --verify
 
 .PHONY: verify-manifests
 verify-manifests: ## Verify embedded manifests match config/module source
