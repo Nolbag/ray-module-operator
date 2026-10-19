@@ -26,11 +26,11 @@ USE_LOCAL="${USE_LOCAL:-true}"
 #   4. "tag@sha"         - fetch tag, reset to specific commit
 
 declare -A ODH_COMPONENT_MANIFESTS=(
-    ["kuberay"]="opendatahub-io:kuberay:dev@2ae7d5536dbac15287940606003151c2cd0819ad:ray-operator/config"
+    ["kuberay"]="opendatahub-io:kuberay:dev@ffc3b91d9aa521f941c77160f6a96be373bfc5cc:ray-operator/config"
 )
 
 declare -A RHOAI_COMPONENT_MANIFESTS=(
-    ["kuberay"]="red-hat-data-services:kuberay:main@3a7b762f61ff9606ec0da721ed59e3678e8ec59a:ray-operator/config"
+    ["kuberay"]="red-hat-data-services:kuberay:main@44695ec54068acd2f553c1cc0116662cfe3e6133:ray-operator/config"
 )
 
 # Select manifests based on platform type
