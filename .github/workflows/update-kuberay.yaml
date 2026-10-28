@@ -17,8 +17,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Require a branch ref
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          [[ "$WORKFLOW_REF" == refs/heads/* ]] || {
+            echo "Update KubeRay must run from a branch ref, got: $WORKFLOW_REF" >&2
+            exit 1
+          }
+
       - name: Check out the selected branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           # A manual run must operate on the branch selected in the fork, not
           # silently fall back to the repository default branch.
@@ -112,6 +123,11 @@ jobs:
           text = path.read_text()
           text = re.sub(r"quay\.io/opendatahub/kuberay-operator:v[0-9.]+", image, text)
           text = re.sub(
+              r'(image: "quay\.io/opendatahub/kuberay-operator:v[0-9.]+(?:@sha256:[^"]+)?", want: ")v[0-9.]+(")',
+              rf"\g<1>v{version}\g<2>",
+              text,
+          )
+          text = re.sub(
               r"want v[0-9.]+ from params\.env fallback",
               f"want v{version} from params.env fallback",
               text,
@@ -138,17 +154,18 @@ jobs:
             exit 0
           fi
 
+          escaped_version="${STARTING_VERSION//./\\.}"
           if rg -n \
-              "kuberay-operator:v${STARTING_VERSION}|kuberayOperator=.*v${STARTING_VERSION}|kuberayOperator: .*v${STARTING_VERSION}" \
+              "kuberay-operator:v${escaped_version}([^0-9.]|$)|kuberayOperator=.*v${escaped_version}([^0-9.]|$)|kuberayOperator: .*v${escaped_version}([^0-9.]|$)" \
               config charts test internal opt/manifests; then
             echo "Found a stale KubeRay v${STARTING_VERSION} fallback reference" >&2
             exit 1
           fi
 
       - name: Create or update pull request
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
-          branch: automation/update-kuberay
+          branch: automation/update-kuberay-${{ github.ref_name }}
           base: ${{ github.ref_name }}
           delete-branch: true
           commit-message: "chore: update KubeRay manifests and fallbacks"
