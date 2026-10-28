@@ -10,5 +10,5 @@ components:
       snapshot: opt/manifests/odh/kuberay
     rhoai:
       repository: https://github.com/red-hat-data-services/kuberay
-      ref: main@5a1ee439c16c21ac12a5ebec9a011f8e00883ceb
+      ref: main@910d6517c45d532ea903dc22e71032a8e2b9b95f
       snapshot: opt/manifests/rhoai/kuberay
