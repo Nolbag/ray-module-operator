@@ -65,6 +65,7 @@ jobs:
         with:
           ref: ${{ steps.context.outputs.base_branch }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Capture starting KubeRay version
         id: previous
@@ -201,6 +202,12 @@ jobs:
               config charts test internal opt/manifests; then
             echo "Found a stale KubeRay v${STARTING_VERSION} fallback reference" >&2
             exit 1
+          else
+            scan_status=$?
+            if [[ "$scan_status" -ne 1 ]]; then
+              echo "Stale-reference scan failed with rg exit code $scan_status" >&2
+              exit "$scan_status"
+            fi
           fi
 
       - name: Create or update pull request
